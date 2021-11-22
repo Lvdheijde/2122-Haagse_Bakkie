@@ -1,0 +1,67 @@
+import time
+import board
+from digitalio import DigitalInOut, Direction
+from analogio import AnalogIn
+import p9813
+import busio
+import adafruit_vl53l0x
+
+i2c = busio.I2C(board.SCL, board.SDA)
+sensor1 = adafruit_vl53l0x.VL53L0X(i2c)
+
+vibration = DigitalInOut(board.D13)
+vibration.direction = Direction.OUTPUT
+
+pin_clk = board.D4
+pin_data = board.D7
+num_leds = 1
+chain = p9813.P9813(pin_clk, pin_data, num_leds)
+
+Trigger1 = 150
+Trigger2 = 50
+
+
+def no_proximity():
+    global Trigger1, sensor1
+    if sensor1.range > Trigger1:
+        return True
+    else:
+        return False
+
+def proximity_wit():
+    global Trigger1, Trigger2, sensor1
+    if Trigger2 < sensor1.range < Trigger1:
+        return True
+    else:
+        return False
+
+def proximity_rood():
+    global Trigger2, Trigger3, sensor1
+    if sensor1.range < Trigger2:
+        return True
+    else:
+        return False
+
+while True:
+    now = time.monotonic()
+    print('Range: {}mm'.format(sensor1.range))
+
+    if no_proximity():
+        vibration.value = False
+        print("switch to niks")
+        chain[0] = (0, 0, 0)
+        chain.write()
+
+    elif proximity_wit():
+        vibration.value = True
+        chain[0] = (220, 20, 60)
+        chain.write()
+        time.sleep(0.1)
+        chain[0] = (0, 0, 0)
+        chain.write()
+        time.sleep(0.1)
+
+    elif proximity_rood():
+        vibration.value = False
+        chain[0] = (220, 20, 60)
+        chain.write()
