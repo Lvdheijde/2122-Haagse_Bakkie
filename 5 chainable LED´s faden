@@ -1,0 +1,84 @@
+import time
+import board
+import pwmio
+import p9813
+import busio
+import adafruit_vl53l0x
+from digitalio import DigitalInOut, Direction, Pull
+from analogio import AnalogIn
+from adafruit_motor import servo
+
+# pwm = pwmio.PWMOut(board.D13, duty_cycle=2 ** 15, frequency=50)
+# my_servo = servo.Servo(pwm)
+
+# angle = 0
+
+i2c = busio.I2C(board.SCL, board.SDA)
+sensor1 = adafruit_vl53l0x.VL53L0X(i2c)
+
+pin_clk = board.D4
+pin_data = board.D7
+num_leds = 5
+chain = p9813.P9813(pin_clk, pin_data, num_leds)
+
+Trigger1 = 150
+
+
+def no_proximity():
+    global Trigger1, sensor1
+    if sensor1.range > Trigger1:
+        return True
+    else:
+        return False
+
+def proximity_person():
+    global Trigger1, Trigger2, sensor1
+    if sensor1.range < Trigger1:
+        return True
+    else:
+        return False
+
+while True:
+    now = time.monotonic()
+    print('Range: {}mm'.format(sensor1.range))
+
+    if no_proximity():
+        print("switch to niks")
+        # my_servo.angle = 0
+        chain[0] = (0, 0, 0)
+        chain[1] = (0, 0, 0)
+        chain[2] = (0, 0, 0)
+        chain[3] = (0, 0, 0)
+        chain[4] = (0, 0, 0)
+        chain.write()
+
+    elif proximity_person():
+        print("in de range")
+       # my_servo.angle = 180
+        for i in range(25, 100, 3):
+            if no_proximity():
+                i = 100
+                for index in range(0, 5):
+                    chain[index] = (0,0,0)
+            else:
+                for index in range(0, 5):
+                    chain[index] = (i, i, i)
+                #chain.write()
+            chain.write()
+        for i in range(100, 25, -3 ):
+            if no_proximity():
+                i = 25
+                for index in range(0, 5):
+                    chain[index] = (0,0,0)
+                    #chain.write()
+            else:
+                for index in range(0, 5):
+                    chain[index] = (i, i, i)
+               # chain.write()
+            chain.write()
+
+            # chain[0] = (i, i, i)
+#             chain[1] = (i, i, i)
+#             chain[2] = (i, i, i)
+#             chain[3] = (i, i, i)
+#             chain[4] = (i, i, i)
