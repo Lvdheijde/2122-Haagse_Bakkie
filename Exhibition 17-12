@@ -1,0 +1,63 @@
+import board
+import time
+import pwmio
+import neopixel
+import adafruit_vl53l0x
+import busio
+from adafruit_motor import servo
+from digitalio import DigitalInOut, Direction
+
+# create a PWMOut object on Pin A2.
+pwm = pwmio.PWMOut(board.D7, frequency=50)
+
+# Create a servo object, my_servo.
+my_servo = servo.ContinuousServo(pwm)
+
+# Create a input time of flight on pin I2C
+i2c = busio.I2C(board.SCL, board.SDA)
+sensor1 = adafruit_vl53l0x.VL53L0X(i2c)
+
+# Set colors for the neopixels
+LessYellow = (255, 150, 39)
+WarmYellow = (240, 110, 15)
+LedOut = (0, 0, 0)
+
+# Pixel pin and number of leds
+pixel_pin = board.A2
+pixel_num = 49
+
+pixels = neopixel.NeoPixel(pixel_pin, pixel_num, brightness=0.2, auto_write=False)
+
+Trigger1 = 500
+
+def no_proximity():
+    global Trigger1, sensor1
+    if sensor1.range > Trigger1:
+        return True
+    else:
+        return False
+
+def person_there():
+    global Trigger1, Trigger2, sensor1
+    if sensor1.range < Trigger1:
+        return True
+    else:
+        return False
+
+while True:
+    if no_proximity():
+        print("no one there")
+        pixels.fill(LedOut)
+        pixels.show()
+        my_servo.throttle = 1.0
+        time.sleep(0.5)
+
+    if person_there():
+        print("person there")
+        pixels.fill(WarmYellow)
+        pixels.show()
+        my_servo.throttle = 0.01
+        time.sleep(0.5)
+
+
+
