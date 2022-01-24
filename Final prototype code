@@ -1,0 +1,200 @@
+import time
+import board
+import busio
+import pwmio
+import neopixel
+import adafruit_vl53l0x
+import adafruit_tca9548a
+from digitalio import DigitalInOut, Direction
+from adafruit_esp32spi import adafruit_esp32spi
+from adafruit_esp32spi import adafruit_esp32spi_wifimanager
+import adafruit_esp32spi.adafruit_esp32spi_socket as socket
+import adafruit_minimqtt as MQTT
+from adafruit_led_animation.animation.chase import Chase
+from adafruit_led_animation.color import AMBER
+
+try:
+    from settings import settings
+except ImportError:
+    print("Settings import failed")
+    raise
+
+board_id = 1
+client_id = "1"
+
+vorige_state = False
+
+er_is_ergens_iemand = False
+aanwezigheids_lijst = [False, False, False, False, False, False]
+
+i2c = board.I2C()
+tca = adafruit_tca9548a.TCA9548A(i2c)
+sensor1_position = 0
+sensor2_position = 1
+sensor3_position = 2
+for channel in range(8):
+    if tca[channel].try_lock():
+        addresses = tca[channel].scan()
+        tca[channel].unlock()
+sensor1 = adafruit_vl53l0x.VL53L0X(tca[sensor1_position])
+sensor2 = adafruit_vl53l0x.VL53L0X(tca[sensor2_position])
+sensor3 = adafruit_vl53l0x.VL53L0X(tca[sensor3_position])
+
+Trigger1 = 700
+
+def no_proximity():
+    global Trigger1, sensor1, sensor2, sensor3
+    if sensor1.range > Trigger1 and sensor2.range > Trigger1 and sensor3.range > Trigger1:
+        return True
+    else:
+        return False
+
+def person_there():
+    global Trigger1, sensor2, sensor1, sensor3
+    if sensor1.range < Trigger1 or sensor2.range < Trigger1 or sensor3.range < Trigger1:
+        return True
+    else:
+        return False
+
+pixel_pin = board.A2
+pixel_num = 50
+
+pixels = neopixel.NeoPixel(pixel_pin, pixel_num, brightness=0.2, auto_write=False)
+chase = Chase(pixels, speed=0.1 , size=2, spacing=49, color=AMBER)
+
+OUT = (0, 0, 0)
+
+# --- Wifi Variables
+esp32_cs = DigitalInOut(board.D9)
+esp32_ready = DigitalInOut(board.D11)
+esp32_reset = DigitalInOut(board.D12)
+spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
+esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
+wifi = adafruit_esp32spi_wifimanager.ESPSPI_WiFiManager(esp, settings)
+ip = str(settings['ip'])
+
+# --- MQTT Variables
+mqtt_client = MQTT.MQTT(broker=ip, port=1883, client_id=client_id)
+
+old_a0_val = 0
+first = True
+
+initial = time.monotonic()
+
+chaseon = False
+
+def chaseloop():
+    global pixel_num, pixel_pin, pixels, time, chase, chaseon, initial
+    now = time.monotonic()
+    if not chaseon:
+        if now - initial > 1:
+            chaseon = True
+            initial = now
+            chase = Chase(pixels, speed=0.1 , size=2, spacing=49, color=AMBER)
+    if chaseon:
+        chase.animate(0.1)
+        if now - initial > 50:
+            chaseon = False
+            pixels.fill(OUT)
+            pixels.show()
+            initial = now
+
+def setup():
+    wifi_mqtt_setup()
+
+def mqtt_loop():
+    while True:
+        try:
+            mqtt_client.loop()
+            lowest_index = -1
+            highest_index = -1
+            count = 0
+            for i in range(1,6):
+                if aanwezigheids_lijst [i]:
+                    count += 1
+                else:
+                    if lowest_index == -1 or lowest_index > i:
+                        lowest_index = i
+                    if highest_index == -1 or highest_index < i:
+                        highest_index = i
+            if count == 0:
+                chaseloop()
+            if count == 1:
+                if board_id == lowest_index or board_id == highest_index:
+                    chaseloop()
+                else:
+                    pixels.fill(OUT)
+                    pixels.show()
+            if count == 2:
+                if board_id == lowest_index:
+                    pixels.fill(AMBER)
+                    pixels.show()
+                    initial = time.monotonic()
+                    chaseon = False
+                else:
+                    pixels.fill(OUT)
+                    pixels.show()
+            if count > 2:
+                pixels.fill(OUT)
+                pixels.show()
+            break
+        except (ValueError, RuntimeError) as e:
+            # print("Failed to get data, retrying\n", e)
+            wifi.reset()
+            mqtt_client.reconnect()
+
+# --- Upon receiving a message from the broker, the client will extract the command and payload.
+def message(client_id, t, message):
+    global command, payload, message_received
+    if t.split("/")[2] != str(board_id):
+        if message == "Iemand is er!":
+            aanwezigheids_lijst[int(t.split("/")[2])] = True
+        if message == "Niemand daar!":
+            aanwezigheids_lijst[int(t.split("/")[2])] = False
+
+# --- loop: code to run every time in the main loop
+def loop():
+    try:
+        mqtt_client.loop()
+        pixels.fill(AMBER)
+        pixels.show()
+        initial = time.monotonic()
+        chaseon = False
+    except (ValueError, RuntimeError) as e:
+        wifi.reset()
+        mqtt_client.reconnect()
+
+
+# --- WiFi & MQTT setup
+def wifi_mqtt_setup():
+    wifi.connect()
+    MQTT.set_socket(socket, esp)
+    mqtt_client.on_connect = connected
+    mqtt_client.on_disconnect = disconnected
+    mqtt_client.on_message = message
+    mqtt_client.connect()
+
+def connected(client, userdata, flags, rc):
+    for i in range(1,6):
+        client.subscribe("/paal/" + str(i))
+
+def disconnected(client, userdata, rc):
+    return
+setup()
+
+while True:
+    if no_proximity():
+        aanwezigheids_lijst[board_id] = False
+        mqtt_loop()
+        if vorige_state:
+            values_string = "Niemand daar!"
+            mqtt_client.publish("/paal/" + str(board_id), values_string)
+        vorige_state = False
+    if person_there():
+        aanwezigheids_lijst[board_id] = True
+        loop()
+        if not vorige_state:
+            values_string = "Iemand is er!"
+            mqtt_client.publish("/paal/" + str(board_id), values_string)
+        vorige_state = True
+
