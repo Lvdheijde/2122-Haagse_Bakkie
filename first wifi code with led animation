@@ -1,0 +1,112 @@
+# --- Imports
+import time
+import board
+import busio
+import pwmio
+import neopixel
+import adafruit_vl53l0x
+import neopixel
+import adafruit_vl53l0x
+from digitalio import DigitalInOut, Direction
+from analogio import AnalogOut, AnalogIn
+from adafruit_motor import servo
+import p9813  # LED
+from adafruit_esp32spi import adafruit_esp32spi
+from adafruit_esp32spi import adafruit_esp32spi_wifimanager
+import adafruit_esp32spi.adafruit_esp32spi_socket as socket
+import adafruit_minimqtt as MQTT
+
+try:
+    from settings import settings
+except ImportError:
+    print("Settings import cfailed")
+    raise
+
+# --- Wifi Variables
+esp32_cs = DigitalInOut(board.D9)
+esp32_ready = DigitalInOut(board.D11)
+esp32_reset = DigitalInOut(board.D12)
+spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
+esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
+wifi = adafruit_esp32spi_wifimanager.ESPSPI_WiFiManager(esp, settings)
+ip = str(settings['ip'])
+
+
+# --- MQTT Variables
+client_id = "bitsyexpander" + str(settings['bitsy_id'])
+sensors_topic = "/" + client_id + "/sensors"
+actuators_topic = "/" + client_id + "/actuators"
+mqtt_client = MQTT.MQTT(broker=ip, port=1883, client_id=client_id)
+
+
+# --- Time of flight sensor
+
+i2c = busio.I2C(board.SCL, board.SDA)
+sensor1 = adafruit_vl53l0x.VL53L0X(i2c)
+
+# --- Neo pixels setup
+LessYellow = (255, 150, 39)
+WarmYellow = (240, 110, 15)
+
+pixel_pin = board.A2
+pixel_num = 30
+
+pixels = neopixel.NeoPixel(pixel_pin, pixel_num, brightness=0.5, auto_write=False)
+
+pulse = Pulse(pixels, speed=0.1, color=WarmYellow, period=3)
+
+
+# --- setup: code to run only once at the start
+def setup():
+    wifi_mqtt_setup()
+
+
+# --- WiFi & MQTT setup
+def wifi_mqtt_setup():
+    print("Connecting to WiFi...")
+    wifi.connect()
+    print("Connected!")
+    MQTT.set_socket(socket, esp)
+    mqtt_client.on_connect = connected
+    mqtt_client.on_disconnect = disconnected
+    #mqtt_client.on_message = message
+    print("Connecting to MQTT broker...")
+    mqtt_client.connect()
+
+
+# --- MQTT loop
+def mqtt_loop():
+    while True:
+        try:
+            mqtt_client.loop()
+            break
+        except (ValueError, RuntimeError) as e:
+            print("Failed to get data, retrying\n", e)
+            wifi.reset()
+            mqtt_client.reconnect()
+
+
+# --- When connected to the MQTT broker, the client subscribes to the actuators topic.
+def connected(client, userdata, flags, rc):
+    print(
+        "Connected to MQTT broker! Listening for actuator instructions on %s"
+        % actuators_topic
+    )
+    client.subscribe(actuators_topic)
+
+
+# --- This function executes when the client disconnects from the broker
+def disconnected(client, userdata, rc):
+    print("Disconnected from MQTT Broker!")
+
+
+# --- Main program
+while True:
+    if no_proximity ():
+        print("no one there")
+        pulse.animate()
+
+    if person_there ():
+        print("person there")
+        pixels.fill(WarmYellow)
+        pixels.show()
